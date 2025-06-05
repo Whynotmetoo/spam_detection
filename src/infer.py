@@ -33,12 +33,12 @@ class EmailPredictor:
         
         # Load model and tokenizer
         self.trainer = BertTrainer()
-        self.trainer.model.load_state_dict(
-            torch.load(
-                os.path.join(model_dir, 'pytorch_model.bin'),
-                map_location=self.device
-            )
-        )
+        # self.trainer.model.load_state_dict(
+        #     torch.load(
+        #         os.path.join(model_dir, 'pytorch_model.bin'),
+        #         map_location=self.device
+        #     )
+        # )
         self.trainer.model.to(self.device)
         self.trainer.model.eval()
         

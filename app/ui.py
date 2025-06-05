@@ -33,6 +33,10 @@ st.set_page_config(
 if 'predictor' not in st.session_state:
     st.session_state.predictor = EmailPredictor()
 
+# Initialize history for predictions
+if 'history' not in st.session_state:
+    st.session_state.history = [] 
+
 def plot_confidence_bar(confidence: float, prediction: str) -> None:
     """
     Plot confidence bar.
@@ -122,11 +126,14 @@ def main():
             if st.button("Predict"):
                 if text:
                     with st.spinner("Analyzing..."):
+                        progress = st.progress(0)
+                        progress.progress(25)
                         result = st.session_state.predictor.predict(
                             text,
                             threshold=threshold
                         )
-                        
+                        progress.progress(100)
+                        st.session_state.history.append(result)      # ← 新增
                         # Display result
                         col1, col2 = st.columns(2)
                         with col1:
@@ -158,10 +165,15 @@ def main():
                 
                 try:
                     with st.spinner("Analyzing..."):
+                        progress = st.progress(0)
+                        progress.progress(25)
                         result = st.session_state.predictor.predict(
                             temp_path,
                             threshold=threshold
                         )
+                        progress.progress(100)
+
+                        st.session_state.history.append(result) 
                         
                         # Display result
                         col1, col2 = st.columns(2)
@@ -188,6 +200,11 @@ def main():
                     # Clean up temporary file
                     if os.path.exists(temp_path):
                         os.remove(temp_path)
+                # ✅ 新增：历史记录表
+    if st.session_state.history:                 # ← 新增
+        st.subheader("Prediction History")       # ← 新增
+        hist_df = pd.DataFrame(st.session_state.history)   # ← 新增
+        st.dataframe(hist_df, use_container_width=True)    # ← 新增
     
     with tab2:
         st.header("Model Performance")
@@ -253,4 +270,4 @@ def main():
                     logger.error(f"Error evaluating model: {str(e)}")
 
 if __name__ == "__main__":
-    main() 
+    main()

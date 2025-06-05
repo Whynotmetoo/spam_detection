@@ -1,10 +1,10 @@
 import os
 import torch
 from torch.utils.data import DataLoader
+from torch.optim import AdamW
 from transformers import (
     BertForSequenceClassification,
     BertTokenizer,
-    AdamW,
     get_linear_schedule_with_warmup
 )
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support
