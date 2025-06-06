@@ -2,16 +2,20 @@ import os
 import torch
 from torch.utils.data import DataLoader
 from torch.optim import AdamW
+from torch.nn import CrossEntropyLoss
 from transformers import (
-    BertForSequenceClassification,
-    BertTokenizer,
+    RobertaForSequenceClassification,
+    RobertaTokenizer,
     get_linear_schedule_with_warmup
 )
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support
+from sklearn.utils.class_weight import compute_class_weight
 import numpy as np
 from tqdm import tqdm
 import logging
 from typing import Dict, Tuple, List
+from dataset import EmailDataset
+import pandas as pd
 
 from dataset import load_datasets
 
@@ -22,129 +26,142 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-class BertTrainer:
+class RobertaTrainer:
     def __init__(
         self,
-        model_name: str = 'bert-base-uncased',
+        model_name: str = 'roberta-base',
         max_length: int = 512,
         batch_size: int = 16,
-        learning_rate: float = 2e-5,
-        num_epochs: int = 3,
-        device: str = None
+        learning_rate: float = 2e-5,  # Reduced learning rate
+        num_epochs: int = 10,
+        warmup_steps: int = 100,
+        weight_decay: float = 0.01,
+        device: str = None,
+        gradient_accumulation_steps: int = 4
     ):
         """
-        Initialize BERT trainer.
-        
-        Args:
-            model_name (str): BERT model name
-            max_length (int): Maximum sequence length
-            batch_size (int): Batch size for training
-            learning_rate (float): Learning rate
-            num_epochs (int): Number of training epochs
-            device (str): Device to use for training
+        Initialize RoBERTa trainer.
         """
         self.model_name = model_name
         self.max_length = max_length
         self.batch_size = batch_size
         self.learning_rate = learning_rate
         self.num_epochs = num_epochs
-        self.device = device or ('cuda' if torch.cuda.is_available() else 'cpu')
+        self.warmup_steps = warmup_steps
+        self.weight_decay = weight_decay
+        self.gradient_accumulation_steps = gradient_accumulation_steps
+        
+        # Set device
+        if device is None:
+            if torch.backends.mps.is_available():
+                self.device = torch.device("mps")
+                logger.info("Using MPS (Metal Performance Shaders) device")
+            elif torch.cuda.is_available():
+                self.device = torch.device("cuda")
+                logger.info("Using CUDA device")
+            else:
+                self.device = torch.device("cpu")
+                logger.info("Using CPU device")
+        else:
+            self.device = torch.device(device)
+            logger.info(f"Using specified device: {device}")
         
         # Initialize model and tokenizer
-        self.tokenizer = BertTokenizer.from_pretrained(model_name)
-        self.model = BertForSequenceClassification.from_pretrained(
+        self.model = RobertaForSequenceClassification.from_pretrained(
             model_name,
-            num_labels=2  # Binary classification
+            num_labels=2,
+            problem_type="single_label_classification"
         )
+        self.tokenizer = RobertaTokenizer.from_pretrained(model_name)
+        
+        # Move model to device
         self.model.to(self.device)
         
-    def compute_metrics(self, preds: np.ndarray, labels: np.ndarray) -> Dict[str, float]:
+        # Create output directory
+        os.makedirs('model', exist_ok=True)
+    
+    def compute_metrics(self, labels, preds):
         """
         Compute evaluation metrics.
-        
-        Args:
-            preds (np.ndarray): Model predictions
-            labels (np.ndarray): True labels
-            
-        Returns:
-            Dict[str, float]: Dictionary of metrics
         """
-        precision, recall, f1, _ = precision_recall_fscore_support(
-            labels,
-            preds,
-            average='binary'
-        )
-        accuracy = accuracy_score(labels, preds)
+        # Ensure inputs are numpy arrays
+        if isinstance(preds, torch.Tensor):
+            preds = preds.cpu().numpy()
+        if isinstance(labels, torch.Tensor):
+            labels = labels.cpu().numpy()
         
-        return {
-            'accuracy': accuracy,
-            'precision': precision,
-            'recall': recall,
-            'f1': f1
-        }
-    
-    def train_epoch(
-        self,
-        train_loader: DataLoader,
-        optimizer: torch.optim.Optimizer,
-        scheduler: torch.optim.lr_scheduler.LRScheduler
-    ) -> float:
-        """
-        Train for one epoch.
-        
-        Args:
-            train_loader (DataLoader): Training data loader
-            optimizer (Optimizer): Optimizer
-            scheduler (LRScheduler): Learning rate scheduler
-            
-        Returns:
-            float: Average training loss
-        """
-        self.model.train()
-        total_loss = 0
-        
-        for batch in tqdm(train_loader, desc='Training'):
-            # Move batch to device
-            input_ids = batch['input_ids'].to(self.device)
-            attention_mask = batch['attention_mask'].to(self.device)
-            labels = batch['labels'].to(self.device)
-            
-            # Forward pass
-            outputs = self.model(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                labels=labels
+        # Handle special case of all-zero predictions
+        if np.all(preds == 0):
+            precision = recall = f1 = 0.0
+        else:
+            precision, recall, f1, _ = precision_recall_fscore_support(
+                labels, preds, average='binary', zero_division=0
             )
-            
-            loss = outputs.loss
-            total_loss += loss.item()
-            
-            # Backward pass
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
-            optimizer.step()
-            scheduler.step()
-            optimizer.zero_grad()
         
-        return total_loss / len(train_loader)
+        acc = accuracy_score(labels, preds)
+        return {'accuracy': acc, 'f1': f1, 'precision': precision, 'recall': recall}
     
-    def evaluate(self, val_loader: DataLoader) -> Tuple[float, Dict[str, float]]:
+    def train(self, train_dataset, val_dataset=None):
         """
-        Evaluate model on validation set.
+        Train the model.
+        """
+        # Create data loaders
+        train_dataloader = DataLoader(
+            train_dataset,
+            batch_size=self.batch_size,
+            shuffle=True
+        )
         
-        Args:
-            val_loader (DataLoader): Validation data loader
+        if val_dataset:
+            val_dataloader = DataLoader(
+                val_dataset,
+                batch_size=self.batch_size
+            )
+        
+        # Log dataset sizes
+        logger.info(f"Training samples: {len(train_dataset)}")
+        if val_dataset:
+            logger.info(f"Validation samples: {len(val_dataset)}")
+        
+        # Initialize loss function
+        criterion = torch.nn.CrossEntropyLoss()
+        
+        # Prepare optimizer and scheduler
+        optimizer = AdamW(
+            self.model.parameters(),
+            lr=self.learning_rate,
+            weight_decay=self.weight_decay,
+            eps=1e-8,
+            betas=(0.9, 0.999)
+        )
+        
+        total_steps = len(train_dataloader) * self.num_epochs // self.gradient_accumulation_steps
+        scheduler = get_linear_schedule_with_warmup(
+            optimizer,
+            num_warmup_steps=self.warmup_steps,
+            num_training_steps=total_steps
+        )
+        
+        # Check model parameters (only at the start of first epoch)
+        if True:  # Changed to True to check parameters
+            for name, param in self.model.named_parameters():
+                if param.requires_grad:
+                    logger.info(f"Parameter: {name} | Shape: {param.shape} | Mean: {param.data.mean():.6f} | Std: {param.data.std():.6f}")
+        
+        best_f1 = 0
+        for epoch in range(self.num_epochs):
+            logger.info(f"Epoch {epoch + 1}/{self.num_epochs}")
             
-        Returns:
-            Tuple[float, Dict[str, float]]: Average validation loss and metrics
-        """
-        self.model.eval()
-        total_loss = 0
-        all_preds = []
-        all_labels = []
-        
-        with torch.no_grad():
-            for batch in tqdm(val_loader, desc='Evaluating'):
+            # Training
+            self.model.train()
+            total_loss = 0
+            progress_bar = tqdm(train_dataloader, desc=f"Epoch {epoch+1}")
+            
+            for batch_idx, batch in enumerate(progress_bar):
+                # Clear gradients at the start of gradient accumulation
+                if batch_idx % self.gradient_accumulation_steps == 0:
+                    optimizer.zero_grad()
+                
                 # Move batch to device
                 input_ids = batch['input_ids'].to(self.device)
                 attention_mask = batch['attention_mask'].to(self.device)
@@ -153,134 +170,125 @@ class BertTrainer:
                 # Forward pass
                 outputs = self.model(
                     input_ids=input_ids,
-                    attention_mask=attention_mask,
-                    labels=labels
+                    attention_mask=attention_mask
                 )
-                
-                loss = outputs.loss
-                total_loss += loss.item()
-                
-                # Get predictions
                 logits = outputs.logits
-                preds = torch.argmax(logits, dim=1).cpu().numpy()
-                all_preds.extend(preds)
-                all_labels.extend(labels.cpu().numpy())
-        
-        # Compute metrics
-        metrics = self.compute_metrics(
-            np.array(all_preds),
-            np.array(all_labels)
-        )
-        
-        return total_loss / len(val_loader), metrics
-    
-    def train(
-        self,
-        train_dataset: torch.utils.data.Dataset,
-        val_dataset: torch.utils.data.Dataset,
-        output_dir: str = 'models/best_model'
-    ) -> Dict[str, List[float]]:
-        """
-        Train the model.
-        
-        Args:
-            train_dataset (Dataset): Training dataset
-            val_dataset (Dataset): Validation dataset
-            output_dir (str): Directory to save best model
+                
+                # Debug output (only for first few batches of first epoch)
+                if epoch == 0 and batch_idx < 3:
+                    probs = torch.softmax(logits, dim=1)
+                    logger.info(f"Batch {batch_idx} sample:")
+                    logger.info(f"Logits: {logits[0].detach().cpu().tolist()}")
+                    logger.info(f"Probabilities: {probs[0].detach().cpu().tolist()}")
+                    logger.info(f"True label: {labels[0].item()}")
+                
+                # Compute loss
+                loss = criterion(logits, labels)
+                loss = loss / self.gradient_accumulation_steps
+                loss.backward()
+                total_loss += loss.item() * self.gradient_accumulation_steps
+                
+                # Update parameters after gradient accumulation steps
+                if (batch_idx + 1) % self.gradient_accumulation_steps == 0:
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+                    optimizer.step()
+                    scheduler.step()
+                    
+                    # Check gradients
+                    for name, param in self.model.named_parameters():
+                        if 'classifier' in name and param.grad is not None:
+                            grad_norm = param.grad.norm().item()
+                            if grad_norm < 1e-6:
+                                logger.warning(f"Low gradient: {name} = {grad_norm}")
+                
+                progress_bar.set_postfix({'loss': loss.item() * self.gradient_accumulation_steps})
             
-        Returns:
-            Dict[str, List[float]]: Training history
-        """
-        # Create data loaders
-        train_loader = DataLoader(
-            train_dataset,
-            batch_size=self.batch_size,
-            shuffle=True
-        )
-        val_loader = DataLoader(
-            val_dataset,
-            batch_size=self.batch_size
-        )
-        
-        logger.info(f"Created data loaders with batch size {self.batch_size}")
-        logger.info(f"Training samples: {len(train_dataset)}, Validation samples: {len(val_dataset)}")
-        
-        # Initialize optimizer and scheduler
-        optimizer = AdamW(
-            self.model.parameters(),
-            lr=self.learning_rate,
-            eps=1e-8
-        )
-        
-        total_steps = len(train_loader) * self.num_epochs
-        scheduler = get_linear_schedule_with_warmup(
-            optimizer,
-            num_warmup_steps=0,
-            num_training_steps=total_steps
-        )
-        
-        logger.info(f"Initialized optimizer with learning rate {self.learning_rate}")
-        logger.info(f"Total training steps: {total_steps}")
-        
-        # Training history
-        history = {
-            'train_loss': [],
-            'val_loss': [],
-            'val_f1': []
-        }
-        
-        best_f1 = 0
-        
-        # Training loop
-        for epoch in range(self.num_epochs):
-            logger.info(f"Epoch {epoch + 1}/{self.num_epochs}")
+            avg_train_loss = total_loss / len(train_dataloader)
+            logger.info(f"Average training loss: {avg_train_loss:.4f}")
             
-            # Train
-            train_loss = self.train_epoch(train_loader, optimizer, scheduler)
-            history['train_loss'].append(train_loss)
-            
-            # Evaluate
-            val_loss, metrics = self.evaluate(val_loader)
-            history['val_loss'].append(val_loss)
-            history['val_f1'].append(metrics['f1'])
-            
-            logger.info(
-                f"Train Loss: {train_loss:.4f}, "
-                f"Val Loss: {val_loss:.4f}, "
-                f"Val F1: {metrics['f1']:.4f}, "
-                f"Val Accuracy: {metrics['accuracy']:.4f}, "
-                f"Val Precision: {metrics['precision']:.4f}, "
-                f"Val Recall: {metrics['recall']:.4f}"
-            )
-            
-            # Save best model
-            if metrics['f1'] > best_f1:
-                best_f1 = metrics['f1']
-                os.makedirs(output_dir, exist_ok=True)
-                self.model.save_pretrained(output_dir)
-                self.tokenizer.save_pretrained(output_dir)
-                logger.info(f"Saved new best model with F1 score: {best_f1:.4f}")
-        
-        return history
+            # Validation
+            if val_dataset:
+                self.model.eval()
+                all_val_preds = []
+                all_val_labels = []
+                val_loss = 0
+                
+                with torch.no_grad():
+                    for batch in tqdm(val_dataloader, desc="Validation"):
+                        # Move batch to device
+                        input_ids = batch['input_ids'].to(self.device)
+                        attention_mask = batch['attention_mask'].to(self.device)
+                        labels = batch['labels'].to(self.device)
+                        
+                        # Forward pass
+                        outputs = self.model(
+                            input_ids=input_ids,
+                            attention_mask=attention_mask
+                        )
+                        logits = outputs.logits
+                        
+                        # Compute loss
+                        loss = criterion(logits, labels)
+                        val_loss += loss.item()
+                        
+                        # Get predictions
+                        preds = torch.argmax(logits, dim=1)
+                        all_val_preds.append(preds)
+                        all_val_labels.append(labels)
+                
+                # Combine all batch results
+                val_preds = torch.cat(all_val_preds)
+                val_labels = torch.cat(all_val_labels)
+                
+                # Compute metrics
+                metrics = self.compute_metrics(val_labels, val_preds)
+                avg_val_loss = val_loss / len(val_dataloader)
+                logger.info(f"Validation loss: {avg_val_loss:.4f}")
+                logger.info(f"Validation metrics: {metrics}")
+                
+                # Save best model
+                if metrics['f1'] > best_f1:
+                    best_f1 = metrics['f1']
+                    model_path = 'model/best_model'
+                    self.model.save_pretrained(model_path)
+                    self.tokenizer.save_pretrained(model_path)
+                    logger.info(f"Saved best model (F1={best_f1:.4f}) to {model_path}")
+                
+                # Always save the latest model
+                model_path = 'model/latest_model'
+                self.model.save_pretrained(model_path)
+                self.tokenizer.save_pretrained(model_path)
+                logger.info(f"Saved latest model to {model_path}")
 
 def main():
-    # Load datasets
-    train_dataset, val_dataset, test_dataset = load_datasets()
+    # Initialize tokenizer
+    tokenizer = RobertaTokenizer.from_pretrained('roberta-base')
     
-    # Initialize trainer
-    trainer = BertTrainer(
-        model_name='bert-base-uncased',
-        max_length=512,
-        batch_size=16,
-        learning_rate=2e-5,
-        num_epochs=3
+    # Load datasets
+    train_df = pd.read_csv('datasets/train.csv')
+    val_df = pd.read_csv('datasets/validate.csv')
+    
+    train_dataset = EmailDataset(
+        subjects=train_df['subject'].values,
+        bodies=train_df['body'].values,
+        labels=train_df['label'].values,
+        tokenizer=tokenizer,
+        max_length=512
     )
     
-    # Train model
-    history = trainer.train(train_dataset, val_dataset)
+    val_dataset = EmailDataset(
+        subjects=val_df['subject'].values,
+        bodies=val_df['body'].values,
+        labels=val_df['label'].values,
+        tokenizer=tokenizer,
+        max_length=512
+    )
     
-    logger.info("Training completed!")
-    logger.info(f"Best F1 score: {max(history['val_f1']):.4f}")
+    # Initialize trainer
+    trainer = RobertaTrainer()
+    
+    # Train model
+    trainer.train(train_dataset, val_dataset)
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main() 
