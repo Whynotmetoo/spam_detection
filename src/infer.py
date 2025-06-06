@@ -6,8 +6,9 @@ import logging
 from email.parser import Parser
 from bs4 import BeautifulSoup
 import re
+from transformers import RobertaForSequenceClassification, RobertaTokenizer
 
-from train import BertTrainer
+from train import RobertaTrainer
 
 # Configure logging
 logging.basicConfig(
@@ -33,15 +34,21 @@ class EmailPredictor:
         logger.info(f"Using device: {self.device}")
         
         # Load model and tokenizer
-        self.trainer = BertTrainer()
-        self.trainer.model = self.trainer.model.from_pretrained(model_dir)
-        self.trainer.tokenizer = self.trainer.tokenizer.from_pretrained(model_dir)
-        self.trainer.model.to(self.device)
-        self.trainer.model.eval()
+        self.model = RobertaForSequenceClassification.from_pretrained(
+            model_dir,
+            num_labels=2,
+            problem_type="single_label_classification"
+        )
+        self.tokenizer = RobertaTokenizer.from_pretrained(model_dir)
+        self.model.to(self.device)
+        self.model.eval()
         logger.info(f"Loaded model from {model_dir}")
         
         # Initialize email parser
         self.email_parser = Parser()
+        
+        # Set max length
+        self.max_length = 512
     
     def clean_text(self, text: str) -> str:
         """
@@ -161,10 +168,10 @@ class EmailPredictor:
         texts = [f"Subject: {subject} Body: {body}" for subject, body in zip(subjects, bodies)]
         
         # Tokenize texts
-        encodings = self.trainer.tokenizer(
+        encodings = self.tokenizer(
             texts,
             add_special_tokens=True,
-            max_length=self.trainer.max_length,
+            max_length=self.max_length,
             padding='max_length',
             truncation=True,
             return_tensors='pt'
@@ -176,7 +183,7 @@ class EmailPredictor:
         
         # Get predictions
         with torch.no_grad():
-            outputs = self.trainer.model(
+            outputs = self.model(
                 input_ids=input_ids,
                 attention_mask=attention_mask
             )

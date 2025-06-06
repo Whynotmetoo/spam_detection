@@ -15,9 +15,9 @@ import seaborn as sns
 from typing import Dict, Tuple
 import logging
 from tqdm import tqdm
+from transformers import RobertaForSequenceClassification, RobertaTokenizer
 
 from dataset import load_datasets
-from train import BertTrainer
 
 # Configure logging
 logging.basicConfig(
@@ -43,12 +43,18 @@ class ModelEvaluator:
         logger.info(f"Using device: {self.device}")
         
         # Load model and tokenizer
-        self.trainer = BertTrainer()
-        self.trainer.model = self.trainer.model.from_pretrained(model_dir)
-        self.trainer.tokenizer = self.trainer.tokenizer.from_pretrained(model_dir)
-        self.trainer.model.to(self.device)
-        self.trainer.model.eval()
+        self.model = RobertaForSequenceClassification.from_pretrained(
+            model_dir,
+            num_labels=2,
+            problem_type="single_label_classification"
+        )
+        self.tokenizer = RobertaTokenizer.from_pretrained(model_dir)
+        self.model.to(self.device)
+        self.model.eval()
         logger.info(f"Loaded model from {model_dir}")
+        
+        # Set max length
+        self.max_length = 512
     
     def predict_proba(self, subjects: list, bodies: list) -> np.ndarray:
         """
@@ -65,10 +71,10 @@ class ModelEvaluator:
         texts = [f"Subject: {subject} Body: {body}" for subject, body in zip(subjects, bodies)]
         
         # Tokenize texts
-        encodings = self.trainer.tokenizer(
+        encodings = self.tokenizer(
             texts,
             add_special_tokens=True,
-            max_length=self.trainer.max_length,
+            max_length=self.max_length,
             padding='max_length',
             truncation=True,
             return_tensors='pt'
@@ -80,7 +86,7 @@ class ModelEvaluator:
         
         # Get predictions
         with torch.no_grad():
-            outputs = self.trainer.model(
+            outputs = self.model(
                 input_ids=input_ids,
                 attention_mask=attention_mask
             )
@@ -113,7 +119,7 @@ class ModelEvaluator:
                 labels = batch['labels'].to(self.device)
                 
                 # Forward pass
-                outputs = self.trainer.model(
+                outputs = self.model(
                     input_ids=input_ids,
                     attention_mask=attention_mask
                 )

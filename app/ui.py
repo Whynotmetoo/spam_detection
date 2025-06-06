@@ -7,13 +7,15 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from typing import Dict, List, Tuple
 import logging
+import torch
+from torch.utils.data import DataLoader
 
 # Add src directory to path
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 from infer import EmailPredictor
 from evaluate import ModelEvaluator
-from dataset import load_and_split_data
+from dataset import load_datasets
 
 # Configure logging
 logging.basicConfig(
@@ -31,11 +33,26 @@ st.set_page_config(
 
 # Initialize session state
 if 'predictor' not in st.session_state:
-    st.session_state.predictor = EmailPredictor()
+    # Set device
+    if torch.cuda.is_available():
+        device = "cuda"
+        logger.info("Using CUDA device for inference")
+    elif torch.backends.mps.is_available():
+        device = "mps"
+        logger.info("Using MPS device for inference")
+    else:
+        device = "cpu"
+        logger.info("Using CPU device for inference")
+    
+    # Load the best model from the model directory
+    model_path = os.path.join(os.path.dirname(__file__), '..', 'model', 'best_model')
+    if not os.path.exists(model_path):
+        model_path = os.path.join(os.path.dirname(__file__), '..', 'model', 'latest_model')
+    st.session_state.predictor = EmailPredictor(model_dir=model_path, device=device)
 
 # Initialize history for predictions
 if 'history' not in st.session_state:
-    st.session_state.history = [] 
+    st.session_state.history = []
 
 def plot_confidence_bar(confidence: float, prediction: str) -> None:
     """
@@ -89,7 +106,7 @@ def plot_confidence_bar(confidence: float, prediction: str) -> None:
 def main():
     st.title("📧 Email Spam Detector")
     st.markdown("""
-    This app uses a fine-tuned BERT model to detect spam emails.
+    This app uses a fine-tuned RoBERTa model to detect spam emails.
     You can either paste email text or upload an email file (.eml or .txt).
     """)
     
@@ -133,7 +150,7 @@ def main():
                             threshold=threshold
                         )
                         progress.progress(100)
-                        st.session_state.history.append(result)      # ← 新增
+                        st.session_state.history.append(result)
                         # Display result
                         col1, col2 = st.columns(2)
                         with col1:
@@ -172,8 +189,7 @@ def main():
                             threshold=threshold
                         )
                         progress.progress(100)
-
-                        st.session_state.history.append(result) 
+                        st.session_state.history.append(result)
                         
                         # Display result
                         col1, col2 = st.columns(2)
@@ -200,11 +216,12 @@ def main():
                     # Clean up temporary file
                     if os.path.exists(temp_path):
                         os.remove(temp_path)
-                # ✅ 新增：历史记录表
-    if st.session_state.history:                 # ← 新增
-        st.subheader("Prediction History")       # ← 新增
-        hist_df = pd.DataFrame(st.session_state.history)   # ← 新增
-        st.dataframe(hist_df, use_container_width=True)    # ← 新增
+    
+    # Display prediction history
+    if st.session_state.history:
+        st.subheader("Prediction History")
+        hist_df = pd.DataFrame(st.session_state.history)
+        st.dataframe(hist_df, use_container_width=True)
     
     with tab2:
         st.header("Model Performance")
@@ -213,22 +230,28 @@ def main():
             with st.spinner("Evaluating model..."):
                 try:
                     # Load validation data
-                    _, val_df = load_and_split_data('data/processed.csv')
+                    _, val_dataset, _ = load_datasets()
                     
-                    # Initialize evaluator
-                    evaluator = ModelEvaluator()
+                    # Get model path
+                    model_path = os.path.join(os.path.dirname(__file__), '..', 'model', 'best_model')
+                    if not os.path.exists(model_path):
+                        model_path = os.path.join(os.path.dirname(__file__), '..', 'model', 'latest_model')
                     
-                    # Get predictions
-                    probs = evaluator.predict_proba(val_df['text'].values)
-                    preds = (probs[:, 1] >= threshold).astype(int)
-                    labels = val_df['label'].values
-                    
-                    # Compute metrics
-                    metrics, _, _ = evaluator.evaluate(
-                        evaluator.trainer.model,
-                        val_df['text'].values,
-                        labels
+                    # Initialize evaluator with the same device as predictor
+                    evaluator = ModelEvaluator(
+                        model_dir=model_path,
+                        device=st.session_state.predictor.device
                     )
+                    
+                    # Create validation loader
+                    val_loader = DataLoader(
+                        val_dataset,
+                        batch_size=32,
+                        shuffle=False
+                    )
+                    
+                    # Evaluate model
+                    metrics, preds, labels = evaluator.evaluate(val_loader)
                     
                     # Display metrics
                     col1, col2, col3, col4 = st.columns(4)
@@ -249,21 +272,9 @@ def main():
                         pd.Series(preds, name='Predicted'),
                         normalize='index'
                     )
-                    sns.heatmap(
-                        cm,
-                        annot=True,
-                        fmt='.1%',
-                        cmap='Blues',
-                        xticklabels=['Ham', 'Spam'],
-                        yticklabels=['Ham', 'Spam']
-                    )
+                    sns.heatmap(cm, annot=True, fmt='.2%', cmap='Blues')
                     st.pyplot(fig)
                     plt.close()
-                    
-                    # Plot ROC curve
-                    st.subheader("ROC Curve")
-                    evaluator.plot_roc_curve(labels, probs[:, 1])
-                    st.image('roc_curve.png')
                     
                 except Exception as e:
                     st.error(f"Error evaluating model: {str(e)}")
