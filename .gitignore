@@ -30,6 +30,7 @@ ENV/
 .vscode/
 *.swp
 *.swo
+.cursorignore
 
 # Project specific
 data/raw/
@@ -45,3 +46,6 @@ roc_curve.png
 Thumbs.db
 desktop.ini
 dev_guidance.md
+
+data/
+models/

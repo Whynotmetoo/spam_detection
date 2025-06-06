@@ -13,7 +13,7 @@ from tqdm import tqdm
 import logging
 from typing import Dict, Tuple, List
 
-from dataset import load_and_split_data, create_datasets
+from dataset import load_datasets
 
 # Configure logging
 logging.basicConfig(
@@ -178,7 +178,7 @@ class BertTrainer:
         self,
         train_dataset: torch.utils.data.Dataset,
         val_dataset: torch.utils.data.Dataset,
-        output_dir: str = 'model/best_model'
+        output_dir: str = 'models/best_model'
     ) -> Dict[str, List[float]]:
         """
         Train the model.
@@ -202,6 +202,9 @@ class BertTrainer:
             batch_size=self.batch_size
         )
         
+        logger.info(f"Created data loaders with batch size {self.batch_size}")
+        logger.info(f"Training samples: {len(train_dataset)}, Validation samples: {len(val_dataset)}")
+        
         # Initialize optimizer and scheduler
         optimizer = AdamW(
             self.model.parameters(),
@@ -215,6 +218,9 @@ class BertTrainer:
             num_warmup_steps=0,
             num_training_steps=total_steps
         )
+        
+        logger.info(f"Initialized optimizer with learning rate {self.learning_rate}")
+        logger.info(f"Total training steps: {total_steps}")
         
         # Training history
         history = {
@@ -241,7 +247,10 @@ class BertTrainer:
             logger.info(
                 f"Train Loss: {train_loss:.4f}, "
                 f"Val Loss: {val_loss:.4f}, "
-                f"Val F1: {metrics['f1']:.4f}"
+                f"Val F1: {metrics['f1']:.4f}, "
+                f"Val Accuracy: {metrics['accuracy']:.4f}, "
+                f"Val Precision: {metrics['precision']:.4f}, "
+                f"Val Recall: {metrics['recall']:.4f}"
             )
             
             # Save best model
@@ -250,24 +259,28 @@ class BertTrainer:
                 os.makedirs(output_dir, exist_ok=True)
                 self.model.save_pretrained(output_dir)
                 self.tokenizer.save_pretrained(output_dir)
-                logger.info(f"Saved best model with F1: {best_f1:.4f}")
+                logger.info(f"Saved new best model with F1 score: {best_f1:.4f}")
         
         return history
 
 def main():
-    # Load and split data
-    train_df, val_df = load_and_split_data('data/processed.csv')
-    
-    # Create datasets
-    train_dataset, val_dataset = create_datasets(train_df, val_df)
+    # Load datasets
+    train_dataset, val_dataset, test_dataset = load_datasets()
     
     # Initialize trainer
-    trainer = BertTrainer()
+    trainer = BertTrainer(
+        model_name='bert-base-uncased',
+        max_length=512,
+        batch_size=16,
+        learning_rate=2e-5,
+        num_epochs=3
+    )
     
     # Train model
     history = trainer.train(train_dataset, val_dataset)
     
     logger.info("Training completed!")
+    logger.info(f"Best F1 score: {max(history['val_f1']):.4f}")
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main() 

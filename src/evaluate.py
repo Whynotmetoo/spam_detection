@@ -14,8 +14,9 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from typing import Dict, Tuple
 import logging
+from tqdm import tqdm
 
-from dataset import load_and_split_data, create_datasets
+from dataset import load_datasets
 from train import BertTrainer
 
 # Configure logging
@@ -28,7 +29,7 @@ logger = logging.getLogger(__name__)
 class ModelEvaluator:
     def __init__(
         self,
-        model_dir: str = 'model/best_model',
+        model_dir: str = 'models/best_model',
         device: str = None
     ):
         """
@@ -39,28 +40,30 @@ class ModelEvaluator:
             device (str): Device to use for evaluation
         """
         self.device = device or ('cuda' if torch.cuda.is_available() else 'cpu')
+        logger.info(f"Using device: {self.device}")
         
         # Load model and tokenizer
         self.trainer = BertTrainer()
-        self.trainer.model.load_state_dict(
-            torch.load(
-                os.path.join(model_dir, 'pytorch_model.bin'),
-                map_location=self.device
-            )
-        )
+        self.trainer.model = self.trainer.model.from_pretrained(model_dir)
+        self.trainer.tokenizer = self.trainer.tokenizer.from_pretrained(model_dir)
         self.trainer.model.to(self.device)
         self.trainer.model.eval()
+        logger.info(f"Loaded model from {model_dir}")
     
-    def predict_proba(self, texts: list) -> np.ndarray:
+    def predict_proba(self, subjects: list, bodies: list) -> np.ndarray:
         """
         Get probability predictions for texts.
         
         Args:
-            texts (list): List of email texts
+            subjects (list): List of email subjects
+            bodies (list): List of email bodies
             
         Returns:
             np.ndarray: Probability predictions
         """
+        # Combine subjects and bodies
+        texts = [f"Subject: {subject} Body: {body}" for subject, body in zip(subjects, bodies)]
+        
         # Tokenize texts
         encodings = self.trainer.tokenizer(
             texts,
@@ -103,7 +106,7 @@ class ModelEvaluator:
         all_labels = []
         
         with torch.no_grad():
-            for batch in val_loader:
+            for batch in tqdm(val_loader, desc='Evaluating'):
                 # Move batch to device
                 input_ids = batch['input_ids'].to(self.device)
                 attention_mask = batch['attention_mask'].to(self.device)
@@ -149,7 +152,7 @@ class ModelEvaluator:
         self,
         y_true: np.ndarray,
         y_pred: np.ndarray,
-        output_path: str = 'confusion_matrix.png'
+        output_path: str = 'results/confusion_matrix.png'
     ) -> None:
         """
         Plot and save confusion matrix.
@@ -159,6 +162,7 @@ class ModelEvaluator:
             y_pred (np.ndarray): Predicted labels
             output_path (str): Path to save plot
         """
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
         cm = confusion_matrix(y_true, y_pred)
         plt.figure(figsize=(8, 6))
         sns.heatmap(
@@ -174,12 +178,13 @@ class ModelEvaluator:
         plt.xlabel('Predicted Label')
         plt.savefig(output_path)
         plt.close()
+        logger.info(f"Saved confusion matrix to {output_path}")
     
     def plot_roc_curve(
         self,
         y_true: np.ndarray,
         y_prob: np.ndarray,
-        output_path: str = 'roc_curve.png'
+        output_path: str = 'results/roc_curve.png'
     ) -> None:
         """
         Plot and save ROC curve.
@@ -189,6 +194,7 @@ class ModelEvaluator:
             y_prob (np.ndarray): Predicted probabilities
             output_path (str): Path to save plot
         """
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
         fpr, tpr, _ = roc_curve(y_true, y_prob)
         roc_auc = auc(fpr, tpr)
         
@@ -209,20 +215,16 @@ class ModelEvaluator:
         plt.legend(loc="lower right")
         plt.savefig(output_path)
         plt.close()
+        logger.info(f"Saved ROC curve to {output_path}")
 
 def main():
-    # Load validation data
-    _, val_df = load_and_split_data('data/processed.csv')
+    # Load datasets
+    _, _, test_dataset = load_datasets()
+    logger.info(f"Loaded test dataset with {len(test_dataset)} samples")
     
-    # Create validation dataset
-    _, val_dataset = create_datasets(
-        pd.DataFrame(),  # Empty DataFrame for training
-        val_df
-    )
-    
-    # Create validation loader
-    val_loader = DataLoader(
-        val_dataset,
+    # Create test loader
+    test_loader = DataLoader(
+        test_dataset,
         batch_size=32,
         shuffle=False
     )
@@ -231,10 +233,10 @@ def main():
     evaluator = ModelEvaluator()
     
     # Evaluate model
-    metrics, preds, labels = evaluator.evaluate(val_loader)
+    metrics, preds, labels = evaluator.evaluate(test_loader)
     
     # Print metrics
-    logger.info("Evaluation Metrics:")
+    logger.info("\nTest Set Metrics:")
     for metric, value in metrics.items():
         logger.info(f"{metric.capitalize()}: {value:.4f}")
     
@@ -242,10 +244,10 @@ def main():
     evaluator.plot_confusion_matrix(labels, preds)
     
     # Get probabilities for ROC curve
-    probs = evaluator.predict_proba(val_df['text'].values)
+    probs = evaluator.predict_proba(test_dataset.subjects, test_dataset.bodies)
     evaluator.plot_roc_curve(labels, probs[:, 1])
     
-    logger.info("Evaluation completed! Plots saved.")
+    logger.info("Evaluation completed!")
 
 if __name__ == "__main__":
     main() 

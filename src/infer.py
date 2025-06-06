@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 class EmailPredictor:
     def __init__(
         self,
-        model_dir: str = 'model/best_model',
+        model_dir: str = 'models/best_model',
         device: str = None
     ):
         """
@@ -30,17 +30,15 @@ class EmailPredictor:
             device (str): Device to use for inference
         """
         self.device = device or ('cuda' if torch.cuda.is_available() else 'cpu')
+        logger.info(f"Using device: {self.device}")
         
         # Load model and tokenizer
         self.trainer = BertTrainer()
-        # self.trainer.model.load_state_dict(
-        #     torch.load(
-        #         os.path.join(model_dir, 'pytorch_model.bin'),
-        #         map_location=self.device
-        #     )
-        # )
+        self.trainer.model = self.trainer.model.from_pretrained(model_dir)
+        self.trainer.tokenizer = self.trainer.tokenizer.from_pretrained(model_dir)
         self.trainer.model.to(self.device)
         self.trainer.model.eval()
+        logger.info(f"Loaded model from {model_dir}")
         
         # Initialize email parser
         self.email_parser = Parser()
@@ -55,6 +53,9 @@ class EmailPredictor:
         Returns:
             str: Cleaned text
         """
+        if not text:
+            return ""
+            
         # Convert to lowercase
         text = text.lower()
         
@@ -104,6 +105,10 @@ class EmailPredictor:
             else:
                 body = email.get_payload(decode=True).decode()
             
+            # Clean subject and body
+            subject = self.clean_text(subject)
+            body = self.clean_text(body)
+            
             return subject, body
             
         except Exception as e:
@@ -130,21 +135,30 @@ class EmailPredictor:
             # Check if text is a file path
             if os.path.isfile(text):
                 subject, body = self.extract_email_content(text)
-                text = f"{subject} {body}"
+            else:
+                # If it's a single text, treat it as body
+                subject = ""
+                body = self.clean_text(text)
             
-            # Clean text
-            text = self.clean_text(text)
-            texts = [text]
+            subjects = [subject]
+            bodies = [body]
             single_input = True
         else:
             # Handle multiple texts/files
-            texts = []
+            subjects = []
+            bodies = []
             for t in text:
                 if os.path.isfile(t):
                     subject, body = self.extract_email_content(t)
-                    t = f"{subject} {body}"
-                texts.append(self.clean_text(t))
+                else:
+                    subject = ""
+                    body = self.clean_text(t)
+                subjects.append(subject)
+                bodies.append(body)
             single_input = False
+        
+        # Combine subjects and bodies
+        texts = [f"Subject: {subject} Body: {body}" for subject, body in zip(subjects, bodies)]
         
         # Tokenize texts
         encodings = self.trainer.tokenizer(
@@ -197,11 +211,17 @@ def main():
         default=0.5,
         help='Classification threshold (default: 0.5)'
     )
+    parser.add_argument(
+        '--model-dir',
+        type=str,
+        default='models/best_model',
+        help='Path to model directory (default: models/best_model)'
+    )
     
     args = parser.parse_args()
     
     # Initialize predictor
-    predictor = EmailPredictor()
+    predictor = EmailPredictor(model_dir=args.model_dir)
     
     # Make prediction
     result = predictor.predict(args.input, args.threshold)

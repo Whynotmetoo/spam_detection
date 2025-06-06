@@ -15,7 +15,8 @@ logger = logging.getLogger(__name__)
 class EmailDataset(Dataset):
     def __init__(
         self,
-        texts: List[str],
+        subjects: List[str],
+        bodies: List[str],
         labels: List[int],
         tokenizer: BertTokenizer,
         max_length: int = 512
@@ -24,22 +25,28 @@ class EmailDataset(Dataset):
         Dataset class for email spam detection.
         
         Args:
-            texts (List[str]): List of email texts
+            subjects (List[str]): List of email subjects
+            bodies (List[str]): List of email bodies
             labels (List[int]): List of labels (0 for ham, 1 for spam)
             tokenizer (BertTokenizer): BERT tokenizer
             max_length (int): Maximum sequence length
         """
-        self.texts = texts
+        self.subjects = subjects
+        self.bodies = bodies
         self.labels = labels
         self.tokenizer = tokenizer
         self.max_length = max_length
         
     def __len__(self) -> int:
-        return len(self.texts)
+        return len(self.subjects)
     
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
-        text = str(self.texts[idx])
+        subject = str(self.subjects[idx])
+        body = str(self.bodies[idx])
         label = self.labels[idx]
+        
+        # Combine subject and body with a separator
+        text = f"Subject: {subject} Body: {body}"
         
         # Tokenize text
         encoding = self.tokenizer(
@@ -57,73 +64,64 @@ class EmailDataset(Dataset):
             'labels': torch.tensor(label, dtype=torch.long)
         }
 
-def load_and_split_data(
-    data_path: str,
-    train_ratio: float = 0.8,
-    random_state: int = 42
-) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """
-    Load and split data into train and validation sets.
-    
-    Args:
-        data_path (str): Path to processed CSV file
-        train_ratio (float): Ratio of training data
-        random_state (int): Random seed for reproducibility
-        
-    Returns:
-        Tuple[pd.DataFrame, pd.DataFrame]: Train and validation DataFrames
-    """
-    try:
-        df = pd.read_csv(data_path)
-        logger.info(f"Loaded {len(df)} samples from {data_path}")
-        
-        # Shuffle and split
-        df = df.sample(frac=1, random_state=random_state).reset_index(drop=True)
-        train_size = int(len(df) * train_ratio)
-        
-        train_df = df[:train_size]
-        val_df = df[train_size:]
-        
-        logger.info(f"Split data into {len(train_df)} training and {len(val_df)} validation samples")
-        
-        return train_df, val_df
-        
-    except Exception as e:
-        logger.error(f"Error loading data from {data_path}: {str(e)}")
-        raise
-
-def create_datasets(
-    train_df: pd.DataFrame,
-    val_df: pd.DataFrame,
+def load_datasets(
+    train_path: str = 'datasets/train.csv',
+    val_path: str = 'datasets/validate.csv',
+    test_path: str = 'datasets/test.csv',
     model_name: str = 'bert-base-uncased',
     max_length: int = 512
-) -> Tuple[EmailDataset, EmailDataset]:
+) -> Tuple[EmailDataset, EmailDataset, EmailDataset]:
     """
-    Create train and validation datasets.
+    Load train, validation, and test datasets.
     
     Args:
-        train_df (pd.DataFrame): Training data
-        val_df (pd.DataFrame): Validation data
+        train_path (str): Path to training data CSV
+        val_path (str): Path to validation data CSV
+        test_path (str): Path to test data CSV
         model_name (str): BERT model name
         max_length (int): Maximum sequence length
         
     Returns:
-        Tuple[EmailDataset, EmailDataset]: Train and validation datasets
+        Tuple[EmailDataset, EmailDataset, EmailDataset]: Train, validation, and test datasets
     """
-    tokenizer = BertTokenizer.from_pretrained(model_name)
-    
-    train_dataset = EmailDataset(
-        texts=train_df['text'].values,
-        labels=train_df['label'].values,
-        tokenizer=tokenizer,
-        max_length=max_length
-    )
-    
-    val_dataset = EmailDataset(
-        texts=val_df['text'].values,
-        labels=val_df['label'].values,
-        tokenizer=tokenizer,
-        max_length=max_length
-    )
-    
-    return train_dataset, val_dataset 
+    try:
+        # Load data
+        train_df = pd.read_csv(train_path)
+        val_df = pd.read_csv(val_path)
+        test_df = pd.read_csv(test_path)
+        
+        logger.info(f"Loaded {len(train_df)} training, {len(val_df)} validation, and {len(test_df)} test samples")
+        
+        # Initialize tokenizer
+        tokenizer = BertTokenizer.from_pretrained(model_name)
+        
+        # Create datasets
+        train_dataset = EmailDataset(
+            subjects=train_df['subject'].values,
+            bodies=train_df['body'].values,
+            labels=train_df['label'].values,
+            tokenizer=tokenizer,
+            max_length=max_length
+        )
+        
+        val_dataset = EmailDataset(
+            subjects=val_df['subject'].values,
+            bodies=val_df['body'].values,
+            labels=val_df['label'].values,
+            tokenizer=tokenizer,
+            max_length=max_length
+        )
+        
+        test_dataset = EmailDataset(
+            subjects=test_df['subject'].values,
+            bodies=test_df['body'].values,
+            labels=test_df['label'].values,
+            tokenizer=tokenizer,
+            max_length=max_length
+        )
+        
+        return train_dataset, val_dataset, test_dataset
+        
+    except Exception as e:
+        logger.error(f"Error loading datasets: {str(e)}")
+        raise 
