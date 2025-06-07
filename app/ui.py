@@ -130,7 +130,7 @@ def main():
     )
     
     # Main content
-    tab1, tab2, tab3 = st.tabs(["Predict", "Model Performance", "Explanation"])
+    tab1, tab2, tab3 = st.tabs(["Predict", "Explanation", "Model Performance"])
     
     with tab1:
         st.header("Make a Prediction")
@@ -268,13 +268,45 @@ def main():
                     if os.path.exists(temp_path):
                         os.remove(temp_path)
     
-    # Display prediction history
-    if st.session_state.history:
-        st.subheader("Prediction History")
-        hist_df = pd.DataFrame(st.session_state.history)
-        st.dataframe(hist_df, use_container_width=True)
+        # Display prediction history
+        if st.session_state.history:
+            st.subheader("Prediction History")
+            hist_df = pd.DataFrame(st.session_state.history)
+            st.dataframe(hist_df, use_container_width=True)
     
     with tab2:
+        st.header("Model Explanation")
+        
+        if 'last_explanation' in st.session_state:
+            st.subheader("Feature Importance")
+            
+            # Display explanation plot
+            st.pyplot(st.session_state.last_explanation['explanation_fig'])
+            
+            # Display feature importance table
+            feature_importance = st.session_state.last_explanation['feature_importance']
+            importance_df = pd.DataFrame({
+                'Feature': list(feature_importance.keys()),
+                'Importance': list(feature_importance.values())
+            })
+            importance_df = importance_df.sort_values('Importance', ascending=False)
+            st.dataframe(importance_df, use_container_width=True)
+            
+            st.markdown("""
+            ### Understanding the Explanation
+            
+            The plot above shows the most important features (words or phrases) that influenced the model's prediction:
+            
+            - **Red bars** indicate features that contributed to a spam prediction
+            - **Green bars** indicate features that contributed to a ham prediction
+            - The length of each bar represents the strength of the feature's influence
+            
+            The table below shows the exact importance scores for each feature.
+            """)
+        else:
+            st.info("Make a prediction first to see the explanation.")
+    
+    with tab3:
         st.header("Model Performance")
         
         if st.button("Evaluate Model"):
@@ -347,37 +379,7 @@ def main():
                     st.error(f"Error evaluating model: {str(e)}")
                     logger.error(f"Error evaluating model: {str(e)}")
 
-    with tab3:
-        st.header("Model Explanation")
-        
-        if 'last_explanation' in st.session_state:
-            st.subheader("Feature Importance")
-            
-            # Display explanation plot
-            st.pyplot(st.session_state.last_explanation['explanation_fig'])
-            
-            # Display feature importance table
-            feature_importance = st.session_state.last_explanation['feature_importance']
-            importance_df = pd.DataFrame({
-                'Feature': list(feature_importance.keys()),
-                'Importance': list(feature_importance.values())
-            })
-            importance_df = importance_df.sort_values('Importance', ascending=False)
-            st.dataframe(importance_df, use_container_width=True)
-            
-            st.markdown("""
-            ### Understanding the Explanation
-            
-            The plot above shows the most important features (words or phrases) that influenced the model's prediction:
-            
-            - **Red bars** indicate features that contributed to a spam prediction
-            - **Green bars** indicate features that contributed to a ham prediction
-            - The length of each bar represents the strength of the feature's influence
-            
-            The table below shows the exact importance scores for each feature.
-            """)
-        else:
-            st.info("Make a prediction first to see the explanation.")
+    
 
 if __name__ == "__main__":
     main()
