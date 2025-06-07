@@ -6,9 +6,7 @@ import logging
 from email.parser import Parser
 from bs4 import BeautifulSoup
 import re
-from transformers import RobertaForSequenceClassification, RobertaTokenizer
-
-from train import RobertaTrainer
+from transformers import BertForSequenceClassification, BertTokenizer
 
 # Configure logging
 logging.basicConfig(
@@ -20,7 +18,7 @@ logger = logging.getLogger(__name__)
 class EmailPredictor:
     def __init__(
         self,
-        model_dir: str = 'models/best_model',
+        model_dir: str = 'model/best_model',
         device: str = None
     ):
         """
@@ -34,12 +32,12 @@ class EmailPredictor:
         logger.info(f"Using device: {self.device}")
         
         # Load model and tokenizer
-        self.model = RobertaForSequenceClassification.from_pretrained(
+        self.model = BertForSequenceClassification.from_pretrained(
             model_dir,
             num_labels=2,
             problem_type="single_label_classification"
         )
-        self.tokenizer = RobertaTokenizer.from_pretrained(model_dir)
+        self.tokenizer = BertTokenizer.from_pretrained(model_dir)
         self.model.to(self.device)
         self.model.eval()
         logger.info(f"Loaded model from {model_dir}")
@@ -165,7 +163,7 @@ class EmailPredictor:
             single_input = False
         
         # Combine subjects and bodies
-        texts = [f"Subject: {subject} Body: {body}" for subject, body in zip(subjects, bodies)]
+        texts = [f"[SUBJECT] {subject} [BODY] {body}" for subject, body in zip(subjects, bodies)]
         
         # Tokenize texts
         encodings = self.tokenizer(
@@ -221,8 +219,8 @@ def main():
     parser.add_argument(
         '--model-dir',
         type=str,
-        default='models/best_model',
-        help='Path to model directory (default: models/best_model)'
+        default='model/best_model',
+        help='Path to model directory (default: model/best_model)'
     )
     
     args = parser.parse_args()

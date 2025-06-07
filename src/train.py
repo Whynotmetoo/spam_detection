@@ -4,8 +4,8 @@ from torch.utils.data import DataLoader
 from torch.optim import AdamW
 from torch.nn import CrossEntropyLoss
 from transformers import (
-    RobertaForSequenceClassification,
-    RobertaTokenizer,
+    BertForSequenceClassification,
+    BertTokenizer,
     get_linear_schedule_with_warmup
 )
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support
@@ -16,6 +16,8 @@ import logging
 from typing import Dict, Tuple, List
 from dataset import EmailDataset
 import pandas as pd
+import json
+import csv
 
 from dataset import load_datasets
 
@@ -26,21 +28,22 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-class RobertaTrainer:
+class BertTrainer:
     def __init__(
         self,
-        model_name: str = 'roberta-base',
+        model_name: str = 'bert-base-uncased',
         max_length: int = 512,
         batch_size: int = 16,
-        learning_rate: float = 2e-5,  # Reduced learning rate
+        learning_rate: float = 2e-5,
         num_epochs: int = 10,
         warmup_steps: int = 100,
         weight_decay: float = 0.01,
         device: str = None,
-        gradient_accumulation_steps: int = 4
+        gradient_accumulation_steps: int = 4,
+        patience: int = 3  # Early stopping patience
     ):
         """
-        Initialize RoBERTa trainer.
+        Initialize BERT trainer.
         """
         self.model_name = model_name
         self.max_length = max_length
@@ -50,6 +53,7 @@ class RobertaTrainer:
         self.warmup_steps = warmup_steps
         self.weight_decay = weight_decay
         self.gradient_accumulation_steps = gradient_accumulation_steps
+        self.patience = patience
         
         # Set device
         if device is None:
@@ -67,12 +71,18 @@ class RobertaTrainer:
             logger.info(f"Using specified device: {device}")
         
         # Initialize model and tokenizer
-        self.model = RobertaForSequenceClassification.from_pretrained(
+        self.model = BertForSequenceClassification.from_pretrained(
             model_name,
             num_labels=2,
             problem_type="single_label_classification"
         )
-        self.tokenizer = RobertaTokenizer.from_pretrained(model_name)
+        self.tokenizer = BertTokenizer.from_pretrained(model_name)
+        
+        # Register special tokens
+        special_tokens_dict = {'additional_special_tokens': ['[SUBJECT]', '[BODY]']}
+        num_added_toks = self.tokenizer.add_special_tokens(special_tokens_dict)
+        if num_added_toks > 0:
+            self.model.resize_token_embeddings(len(self.tokenizer))
         
         # Move model to device
         self.model.to(self.device)
@@ -148,7 +158,10 @@ class RobertaTrainer:
                 if param.requires_grad:
                     logger.info(f"Parameter: {name} | Shape: {param.shape} | Mean: {param.data.mean():.6f} | Std: {param.data.std():.6f}")
         
+        history = []  # For saving metrics per epoch
         best_f1 = 0
+        best_epoch = 0
+        epochs_no_improve = 0
         for epoch in range(self.num_epochs):
             logger.info(f"Epoch {epoch + 1}/{self.num_epochs}")
             
@@ -246,23 +259,70 @@ class RobertaTrainer:
                 logger.info(f"Validation loss: {avg_val_loss:.4f}")
                 logger.info(f"Validation metrics: {metrics}")
                 
-                # Save best model
+                # Save history
+                history.append({
+                    'epoch': epoch + 1,
+                    'train_loss': avg_train_loss,
+                    'val_loss': avg_val_loss,
+                    'accuracy': metrics['accuracy'],
+                    'precision': metrics['precision'],
+                    'recall': metrics['recall'],
+                    'f1': metrics['f1']
+                })
+                
+                # Early stopping logic
                 if metrics['f1'] > best_f1:
                     best_f1 = metrics['f1']
+                    best_epoch = epoch + 1
+                    epochs_no_improve = 0
                     model_path = 'model/best_model'
                     self.model.save_pretrained(model_path)
                     self.tokenizer.save_pretrained(model_path)
                     logger.info(f"Saved best model (F1={best_f1:.4f}) to {model_path}")
+                else:
+                    epochs_no_improve += 1
+                    logger.info(f"No improvement in F1 for {epochs_no_improve} epoch(s)")
                 
                 # Always save the latest model
                 model_path = 'model/latest_model'
                 self.model.save_pretrained(model_path)
                 self.tokenizer.save_pretrained(model_path)
                 logger.info(f"Saved latest model to {model_path}")
+                
+                # Check early stopping
+                if epochs_no_improve >= self.patience:
+                    logger.info(f"Early stopping at epoch {epoch+1} (no F1 improvement for {self.patience} epochs)")
+                    break
+        
+        # Save training parameters
+        params = {
+            'model_name': self.model_name,
+            'max_length': self.max_length,
+            'batch_size': self.batch_size,
+            'learning_rate': self.learning_rate,
+            'num_epochs': self.num_epochs,
+            'warmup_steps': self.warmup_steps,
+            'weight_decay': self.weight_decay,
+            'gradient_accumulation_steps': self.gradient_accumulation_steps,
+            'patience': self.patience,
+            'best_f1': best_f1,
+            'best_epoch': best_epoch
+        }
+        with open('model/training_params.json', 'w') as f:
+            json.dump(params, f, indent=2)
+        
+        # Save training history
+        if history:
+            with open('model/training_history.csv', 'w', newline='') as f:
+                writer = csv.DictWriter(f, fieldnames=history[0].keys())
+                writer.writeheader()
+                writer.writerows(history)
 
 def main():
     # Initialize tokenizer
-    tokenizer = RobertaTokenizer.from_pretrained('roberta-base')
+    tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+    special_tokens_dict = {'additional_special_tokens': ['[SUBJECT]', '[BODY]']}
+    num_added_toks = tokenizer.add_special_tokens(special_tokens_dict)
     
     # Load datasets
     train_df = pd.read_csv('datasets/train.csv')
@@ -285,10 +345,16 @@ def main():
     )
     
     # Initialize trainer
-    trainer = RobertaTrainer()
+    trainer = BertTrainer()
+    trainer.tokenizer = tokenizer  # Ensure trainer uses the tokenizer with special tokens
+    trainer.model.resize_token_embeddings(len(tokenizer))
     
     # Train model
     trainer.train(train_dataset, val_dataset)
+
+    # Save tokenizer with model
+    trainer.tokenizer.save_pretrained('model/best_model')
+    trainer.tokenizer.save_pretrained('model/latest_model')
 
 if __name__ == "__main__":
     main() 

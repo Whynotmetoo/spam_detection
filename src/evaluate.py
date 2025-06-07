@@ -15,7 +15,7 @@ import seaborn as sns
 from typing import Dict, Tuple
 import logging
 from tqdm import tqdm
-from transformers import RobertaForSequenceClassification, RobertaTokenizer
+from transformers import BertForSequenceClassification, BertTokenizer
 
 from dataset import load_datasets
 
@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 class ModelEvaluator:
     def __init__(
         self,
-        model_dir: str = 'models/best_model',
+        model_dir: str = 'model/best_model',
         device: str = None
     ):
         """
@@ -42,16 +42,34 @@ class ModelEvaluator:
         self.device = device or ('cuda' if torch.cuda.is_available() else 'cpu')
         logger.info(f"Using device: {self.device}")
         
-        # Load model and tokenizer
-        self.model = RobertaForSequenceClassification.from_pretrained(
-            model_dir,
-            num_labels=2,
-            problem_type="single_label_classification"
-        )
-        self.tokenizer = RobertaTokenizer.from_pretrained(model_dir)
-        self.model.to(self.device)
-        self.model.eval()
-        logger.info(f"Loaded model from {model_dir}")
+        try:
+            # Load model and tokenizer
+            if model_dir == 'bert-base-uncased':
+                # For original BERT model
+                self.model = BertForSequenceClassification.from_pretrained(
+                    model_dir,
+                    num_labels=2,
+                    problem_type="single_label_classification"
+                )
+                self.tokenizer = BertTokenizer.from_pretrained(model_dir)
+            else:
+                # For fine-tuned model
+                if not os.path.exists(model_dir):
+                    raise ValueError(f"Model directory {model_dir} does not exist")
+                self.model = BertForSequenceClassification.from_pretrained(
+                    model_dir,
+                    num_labels=2,
+                    problem_type="single_label_classification"
+                )
+                self.tokenizer = BertTokenizer.from_pretrained(model_dir)
+            
+            self.model.to(self.device)
+            self.model.eval()
+            logger.info(f"Loaded model from {model_dir}")
+            
+        except Exception as e:
+            logger.error(f"Error loading model: {str(e)}")
+            raise
         
         # Set max length
         self.max_length = 512
@@ -68,7 +86,7 @@ class ModelEvaluator:
             np.ndarray: Probability predictions
         """
         # Combine subjects and bodies
-        texts = [f"Subject: {subject} Body: {body}" for subject, body in zip(subjects, bodies)]
+        texts = [f"[SUBJECT] {subject} [BODY] {body}" for subject, body in zip(subjects, bodies)]
         
         # Tokenize texts
         encodings = self.tokenizer(
@@ -111,48 +129,53 @@ class ModelEvaluator:
         all_probs = []
         all_labels = []
         
-        with torch.no_grad():
-            for batch in tqdm(val_loader, desc='Evaluating'):
-                # Move batch to device
-                input_ids = batch['input_ids'].to(self.device)
-                attention_mask = batch['attention_mask'].to(self.device)
-                labels = batch['labels'].to(self.device)
-                
-                # Forward pass
-                outputs = self.model(
-                    input_ids=input_ids,
-                    attention_mask=attention_mask
-                )
-                
-                # Get predictions and probabilities
-                probs = torch.softmax(outputs.logits, dim=1)
-                preds = torch.argmax(probs, dim=1)
-                
-                all_preds.extend(preds.cpu().numpy())
-                all_probs.extend(probs[:, 1].cpu().numpy())  # Probability of spam class
-                all_labels.extend(labels.cpu().numpy())
-        
-        # Convert to numpy arrays
-        all_preds = np.array(all_preds)
-        all_probs = np.array(all_probs)
-        all_labels = np.array(all_labels)
-        
-        # Compute metrics
-        precision, recall, f1, _ = precision_recall_fscore_support(
-            all_labels,
-            all_preds,
-            average='binary'
-        )
-        accuracy = accuracy_score(all_labels, all_preds)
-        
-        metrics = {
-            'accuracy': accuracy,
-            'precision': precision,
-            'recall': recall,
-            'f1': f1
-        }
-        
-        return metrics, all_preds, all_labels
+        try:
+            with torch.no_grad():
+                for batch in tqdm(val_loader, desc='Evaluating'):
+                    # Move batch to device
+                    input_ids = batch['input_ids'].to(self.device)
+                    attention_mask = batch['attention_mask'].to(self.device)
+                    labels = batch['labels'].to(self.device)
+                    
+                    # Forward pass
+                    outputs = self.model(
+                        input_ids=input_ids,
+                        attention_mask=attention_mask
+                    )
+                    
+                    # Get predictions and probabilities
+                    probs = torch.softmax(outputs.logits, dim=1)
+                    preds = torch.argmax(probs, dim=1)
+                    
+                    all_preds.extend(preds.cpu().numpy())
+                    all_probs.extend(probs[:, 1].cpu().numpy())  # Probability of spam class
+                    all_labels.extend(labels.cpu().numpy())
+            
+            # Convert to numpy arrays
+            all_preds = np.array(all_preds)
+            all_probs = np.array(all_probs)
+            all_labels = np.array(all_labels)
+            
+            # Compute metrics
+            precision, recall, f1, _ = precision_recall_fscore_support(
+                all_labels,
+                all_preds,
+                average='binary'
+            )
+            accuracy = accuracy_score(all_labels, all_preds)
+            
+            metrics = {
+                'accuracy': accuracy,
+                'precision': precision,
+                'recall': recall,
+                'f1': f1
+            }
+            
+            return metrics, all_preds, all_labels
+            
+        except Exception as e:
+            logger.error(f"Error during evaluation: {str(e)}")
+            raise
     
     def plot_confusion_matrix(
         self,

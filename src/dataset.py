@@ -1,6 +1,6 @@
 import torch
 from torch.utils.data import Dataset
-from transformers import RobertaTokenizer
+from transformers import BertTokenizer
 import pandas as pd
 from typing import Dict, List, Tuple
 import logging
@@ -18,7 +18,7 @@ class EmailDataset(Dataset):
         subjects: List[str],
         bodies: List[str],
         labels: List[int],
-        tokenizer: RobertaTokenizer,
+        tokenizer: BertTokenizer,
         max_length: int = 512
     ):
         """
@@ -28,7 +28,7 @@ class EmailDataset(Dataset):
             subjects (List[str]): List of email subjects
             bodies (List[str]): List of email bodies
             labels (List[int]): List of labels (0 for ham, 1 for spam)
-            tokenizer (RobertaTokenizer): RoBERTa tokenizer
+            tokenizer (BertTokenizer): BERT tokenizer
             max_length (int): Maximum sequence length
         """
         self.subjects = subjects
@@ -65,37 +65,37 @@ class EmailDataset(Dataset):
         subject = self.clean_text(str(self.subjects[idx]))
         body = self.clean_text(str(self.bodies[idx]))
         label = self.labels[idx]
-        
         # Handle empty subject/body
         if not subject.strip():
             subject = "[NO SUBJECT]"
         if not body.strip():
             body = "[NO BODY]"
-        
         # Combine subject and body with clear separators
-        text = f"<s> [SUBJECT] {subject} [BODY] {body} </s>"
-        
+        text = f"[SUBJECT] {subject} [BODY] {body}"
         # Tokenize text
         encoding = self.tokenizer(
             text,
-            add_special_tokens=False,  # We already added special tokens
+            add_special_tokens=True,
             max_length=self.max_length,
             padding='max_length',
             truncation=True,
             return_tensors='pt'
         )
-        
+        # Convert to tensors
+        input_ids = encoding['input_ids'].squeeze(0)
+        attention_mask = encoding['attention_mask'].squeeze(0)
+        label_tensor = torch.tensor(label, dtype=torch.long)
         return {
-            'input_ids': encoding['input_ids'].flatten(),
-            'attention_mask': encoding['attention_mask'].flatten(),
-            'labels': torch.tensor(label, dtype=torch.long)
+            'input_ids': input_ids,
+            'attention_mask': attention_mask,
+            'labels': label_tensor
         }
 
 def load_datasets(
     train_path: str = 'datasets/train.csv',
     val_path: str = 'datasets/validate.csv',
     test_path: str = 'datasets/test.csv',
-    model_name: str = 'roberta-base',
+    model_name: str = 'bert-base-uncased',
     max_length: int = 512
 ) -> Tuple[EmailDataset, EmailDataset, EmailDataset]:
     """
@@ -105,7 +105,7 @@ def load_datasets(
         train_path (str): Path to training data CSV
         val_path (str): Path to validation data CSV
         test_path (str): Path to test data CSV
-        model_name (str): RoBERTa model name
+        model_name (str): BERT model name
         max_length (int): Maximum sequence length
         
     Returns:
@@ -120,7 +120,7 @@ def load_datasets(
         logger.info(f"Loaded {len(train_df)} training, {len(val_df)} validation, and {len(test_df)} test samples")
         
         # Initialize tokenizer
-        tokenizer = RobertaTokenizer.from_pretrained(model_name)
+        tokenizer = BertTokenizer.from_pretrained(model_name)
         
         # Create datasets
         train_dataset = EmailDataset(

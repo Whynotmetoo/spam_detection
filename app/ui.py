@@ -227,49 +227,65 @@ def main():
         st.header("Model Performance")
         
         if st.button("Evaluate Model"):
-            with st.spinner("Evaluating model..."):
+            with st.spinner("Evaluating fine-tuned model..."):
                 try:
-                    # Load validation data
-                    _, val_dataset, _ = load_datasets()
+                    # Load test data
+                    _, _, test_dataset = load_datasets()
                     
-                    # Get model path
-                    model_path = os.path.join(os.path.dirname(__file__), '..', 'model', 'best_model')
-                    if not os.path.exists(model_path):
-                        model_path = os.path.join(os.path.dirname(__file__), '..', 'model', 'latest_model')
-                    
-                    # Initialize evaluator with the same device as predictor
-                    evaluator = ModelEvaluator(
-                        model_dir=model_path,
-                        device=st.session_state.predictor.device
-                    )
-                    
-                    # Create validation loader
-                    val_loader = DataLoader(
-                        val_dataset,
+                    # Create test loader
+                    test_loader = DataLoader(
+                        test_dataset,
                         batch_size=32,
                         shuffle=False
                     )
                     
-                    # Evaluate model
-                    metrics, preds, labels = evaluator.evaluate(val_loader)
+                    # Get model path for fine-tuned model
+                    model_path = os.path.join(os.path.dirname(__file__), '..', 'model', 'best_model')
+                    if not os.path.exists(model_path):
+                        model_path = os.path.join(os.path.dirname(__file__), '..', 'model', 'latest_model')
+                        if not os.path.exists(model_path):
+                            st.error("No fine-tuned model found. Please train the model first.")
+                            logger.error("No fine-tuned model found")
+                            return
+                    
+                    try:
+                        finetuned_evaluator = ModelEvaluator(
+                            model_dir=model_path,  # Fine-tuned model
+                            device=st.session_state.predictor.device
+                        )
+                        logger.info(f"Successfully loaded fine-tuned model from {model_path}")
+                    except Exception as e:
+                        st.error(f"Error loading fine-tuned model: {str(e)}")
+                        logger.error(f"Error loading fine-tuned model: {str(e)}")
+                        return
+                    
+                    # Evaluate fine-tuned model
+                    try:
+                        finetuned_metrics, finetuned_preds, finetuned_labels = finetuned_evaluator.evaluate(test_loader)
+                    except Exception as e:
+                        st.error(f"Error during model evaluation: {str(e)}")
+                        logger.error(f"Error during model evaluation: {str(e)}")
+                        return
                     
                     # Display metrics
-                    col1, col2, col3, col4 = st.columns(4)
-                    with col1:
-                        st.metric("Accuracy", f"{metrics['accuracy']:.1%}")
-                    with col2:
-                        st.metric("Precision", f"{metrics['precision']:.1%}")
-                    with col3:
-                        st.metric("Recall", f"{metrics['recall']:.1%}")
-                    with col4:
-                        st.metric("F1 Score", f"{metrics['f1']:.1%}")
+                    st.subheader("Fine-tuned Model Performance")
+                    metrics_df = pd.DataFrame({
+                        'Metric': ['Accuracy', 'Precision', 'Recall', 'F1 Score'],
+                        'Fine-tuned BERT': [
+                            f"{finetuned_metrics['accuracy']:.1%}",
+                            f"{finetuned_metrics['precision']:.1%}",
+                            f"{finetuned_metrics['recall']:.1%}",
+                            f"{finetuned_metrics['f1']:.1%}"
+                        ]
+                    })
+                    st.dataframe(metrics_df, use_container_width=True)
                     
                     # Plot confusion matrix
                     st.subheader("Confusion Matrix")
-                    fig, ax = plt.subplots(figsize=(8, 6))
+                    fig, ax = plt.subplots(figsize=(6, 4))
                     cm = pd.crosstab(
-                        pd.Series(labels, name='Actual'),
-                        pd.Series(preds, name='Predicted'),
+                        pd.Series(finetuned_labels, name='Actual'),
+                        pd.Series(finetuned_preds, name='Predicted'),
                         normalize='index'
                     )
                     sns.heatmap(cm, annot=True, fmt='.2%', cmap='Blues')
