@@ -16,6 +16,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src'))
 from infer import EmailPredictor
 from evaluate import ModelEvaluator
 from dataset import load_datasets
+from explain import EmailExplainer
 
 # Configure logging
 logging.basicConfig(
@@ -49,6 +50,13 @@ if 'predictor' not in st.session_state:
     if not os.path.exists(model_path):
         model_path = os.path.join(os.path.dirname(__file__), '..', 'model', 'latest_model')
     st.session_state.predictor = EmailPredictor(model_dir=model_path, device=device)
+    
+    # Initialize explainer
+    st.session_state.explainer = EmailExplainer(
+        model=st.session_state.predictor.model,
+        tokenizer=st.session_state.predictor.tokenizer,
+        device=device
+    )
 
 # Initialize history for predictions
 if 'history' not in st.session_state:
@@ -122,7 +130,7 @@ def main():
     )
     
     # Main content
-    tab1, tab2 = st.tabs(["Predict", "Model Performance"])
+    tab1, tab2, tab3 = st.tabs(["Predict", "Model Performance", "Explanation"])
     
     with tab1:
         st.header("Make a Prediction")
@@ -149,7 +157,27 @@ def main():
                             text,
                             threshold=threshold
                         )
-                        progress.progress(100)
+                        progress.progress(50)
+                        
+                        # Generate explanation
+                        try:
+                            feature_importance, explanation_fig = st.session_state.explainer.explain_prediction(
+                                text,
+                                result['prediction'],
+                                result['confidence']
+                            )
+                            progress.progress(100)
+                            
+                            # Store explanation results
+                            st.session_state.last_explanation = {
+                                'feature_importance': feature_importance,
+                                'explanation_fig': explanation_fig
+                            }
+                        except Exception as e:
+                            logger.error(f"Error generating explanation: {str(e)}")
+                            st.warning("Could not generate explanation for this text.")
+                            progress.progress(100)
+                        
                         st.session_state.history.append(result)
                         # Display result
                         col1, col2 = st.columns(2)
@@ -188,7 +216,31 @@ def main():
                             temp_path,
                             threshold=threshold
                         )
-                        progress.progress(100)
+                        progress.progress(50)
+                        
+                        # Generate explanation
+                        try:
+                            # Get email content for explanation
+                            subject, body = st.session_state.predictor.extract_email_content(temp_path)
+                            email_text = f"Subject: {subject}\n\nBody: {body}"
+                            
+                            feature_importance, explanation_fig = st.session_state.explainer.explain_prediction(
+                                email_text,
+                                result['prediction'],
+                                result['confidence']
+                            )
+                            progress.progress(100)
+                            
+                            # Store explanation results
+                            st.session_state.last_explanation = {
+                                'feature_importance': feature_importance,
+                                'explanation_fig': explanation_fig
+                            }
+                        except Exception as e:
+                            logger.error(f"Error generating explanation: {str(e)}")
+                            st.warning("Could not generate explanation for this email.")
+                            progress.progress(100)
+                        
                         st.session_state.history.append(result)
                         
                         # Display result
@@ -207,7 +259,6 @@ def main():
                         
                         # Display email content
                         with st.expander("View Email Content"):
-                            subject, body = st.session_state.predictor.extract_email_content(temp_path)
                             st.markdown(f"**Subject:** {subject}")
                             st.markdown("**Body:**")
                             st.text(body)
@@ -295,6 +346,38 @@ def main():
                 except Exception as e:
                     st.error(f"Error evaluating model: {str(e)}")
                     logger.error(f"Error evaluating model: {str(e)}")
+
+    with tab3:
+        st.header("Model Explanation")
+        
+        if 'last_explanation' in st.session_state:
+            st.subheader("Feature Importance")
+            
+            # Display explanation plot
+            st.pyplot(st.session_state.last_explanation['explanation_fig'])
+            
+            # Display feature importance table
+            feature_importance = st.session_state.last_explanation['feature_importance']
+            importance_df = pd.DataFrame({
+                'Feature': list(feature_importance.keys()),
+                'Importance': list(feature_importance.values())
+            })
+            importance_df = importance_df.sort_values('Importance', ascending=False)
+            st.dataframe(importance_df, use_container_width=True)
+            
+            st.markdown("""
+            ### Understanding the Explanation
+            
+            The plot above shows the most important features (words or phrases) that influenced the model's prediction:
+            
+            - **Red bars** indicate features that contributed to a spam prediction
+            - **Green bars** indicate features that contributed to a ham prediction
+            - The length of each bar represents the strength of the feature's influence
+            
+            The table below shows the exact importance scores for each feature.
+            """)
+        else:
+            st.info("Make a prediction first to see the explanation.")
 
 if __name__ == "__main__":
     main()
