@@ -142,10 +142,15 @@ def main():
         )
         
         if input_method == "Text Input":
+            subject = st.text_input(
+                "Subject:",
+                help="Enter the email subject (optional)"
+            )
+            
             text = st.text_area(
-                "Enter email text:",
+                "Body:",
                 height=200,
-                help="Paste the email content here"
+                help="Enter the email body"
             )
             
             if st.button("Predict"):
@@ -153,16 +158,24 @@ def main():
                     with st.spinner("Analyzing..."):
                         progress = st.progress(0)
                         progress.progress(25)
+                        
+                        # Clean text
+                        cleaned_subject = st.session_state.predictor.clean_text(subject)
+                        cleaned_body = st.session_state.predictor.clean_text(text)
+                        
                         result = st.session_state.predictor.predict(
-                            text,
+                            text=cleaned_body,
+                            subject=cleaned_subject,
                             threshold=threshold
                         )
                         progress.progress(50)
                         
                         # Generate explanation
                         try:
+                            # Combine subject and body for explanation
+                            email_text = f"[SUBJECT] {cleaned_subject} [BODY] {cleaned_body}"
                             feature_importance, explanation_fig = st.session_state.explainer.explain_prediction(
-                                text,
+                                email_text,
                                 result['prediction'],
                                 result['confidence']
                             )
@@ -212,18 +225,25 @@ def main():
                     with st.spinner("Analyzing..."):
                         progress = st.progress(0)
                         progress.progress(25)
+                        
+                        # Get email content
+                        subject, body = st.session_state.predictor.extract_email_content(temp_path)
+                        
+                        # Clean subject and body
+                        cleaned_subject = st.session_state.predictor.clean_text(subject)
+                        cleaned_body = st.session_state.predictor.clean_text(body)
+                        
                         result = st.session_state.predictor.predict(
-                            temp_path,
+                            text=cleaned_body,
+                            subject=cleaned_subject,
                             threshold=threshold
                         )
                         progress.progress(50)
                         
                         # Generate explanation
                         try:
-                            # Get email content for explanation
-                            subject, body = st.session_state.predictor.extract_email_content(temp_path)
-                            email_text = f"Subject: {subject}\n\nBody: {body}"
-                            
+                            # Combine subject and body for explanation
+                            email_text = f"[SUBJECT] {cleaned_subject} [BODY] {cleaned_body}"
                             feature_importance, explanation_fig = st.session_state.explainer.explain_prediction(
                                 email_text,
                                 result['prediction'],

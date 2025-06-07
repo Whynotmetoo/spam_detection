@@ -6,6 +6,8 @@ import logging
 from transformers import BertTokenizer
 import matplotlib.pyplot as plt
 import seaborn as sns
+import string
+from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS
 
 # Configure logging
 logging.basicConfig(
@@ -92,41 +94,82 @@ class EmailExplainer:
             Tuple[Dict[str, float], plt.Figure]: Feature importance and explanation plot
         """
         try:
-            # Get explanation
-            exp = self.explainer.explain_instance(
-                text,
-                self.predict_proba,
-                num_features=self.num_features,
-                num_samples=self.num_samples
-            )
+            # Ensure text is not empty
+            if not text or not text.strip():
+                raise ValueError("Input text cannot be empty")
             
-            # Get feature importance
-            feature_importance = dict(exp.as_list())
+            # Log input text for debugging
+            logger.info(f"Generating explanation for text: {text[:100]}...")
+            
+            # Get explanation
+            try:
+                exp = self.explainer.explain_instance(
+                    text,
+                    self.predict_proba,
+                    num_features=self.num_features,
+                    num_samples=self.num_samples,
+                    top_labels=1  # Only explain the predicted class
+                )
+            except Exception as e:
+                logger.error(f"LIME explanation failed: {str(e)}")
+                raise ValueError(f"Failed to generate explanation: {str(e)}")
+            
+            # Get feature importance and filter out custom tokens
+            feature_importance = {}
+            try:
+                for feature, score in exp.as_list():
+                    # Skip any feature containing SUBJECT or BODY
+                    if 'SUBJECT' in feature or 'BODY' in feature:
+                        continue
+                    # Skip stopwords and pure punctuation
+                    feature_clean = feature.strip().lower().strip(string.punctuation)
+                    if feature_clean in ENGLISH_STOP_WORDS or not feature_clean:
+                        continue
+                    feature_importance[feature] = score
+                
+                # Check if we have any features after filtering
+                if not feature_importance:
+                    logger.warning("No features found after filtering custom tokens")
+                    raise ValueError("No meaningful features found in the explanation")
+                
+            except Exception as e:
+                logger.error(f"Error processing features: {str(e)}")
+                raise ValueError(f"Failed to process features: {str(e)}")
             
             # Create explanation plot
-            fig, ax = plt.subplots(figsize=(10, 6))
-            
-            # Get feature names and scores
-            features = [f[0] for f in exp.as_list()]
-            scores = [f[1] for f in exp.as_list()]
-            
-            # Create horizontal bar plot
-            y_pos = np.arange(len(features))
-            colors = ['red' if s > 0 else 'green' for s in scores]
-            
-            ax.barh(y_pos, scores, align='center', color=colors)
-            ax.set_yticks(y_pos)
-            ax.set_yticklabels(features)
-            ax.invert_yaxis()  # labels read top-to-bottom
-            
-            # Add labels and title
-            ax.set_xlabel('Feature Importance')
-            ax.set_title(f'LIME Explanation for {prediction.upper()} Prediction (Confidence: {confidence:.1%})')
-            
-            # Add vertical line at x=0
-            ax.axvline(x=0, color='black', linestyle='-', alpha=0.3)
-            
-            plt.tight_layout()
+            try:
+                fig, ax = plt.subplots(figsize=(10, 6))
+                
+                # Get feature names and scores (excluding custom tokens)
+                features = list(feature_importance.keys())
+                scores = list(feature_importance.values())
+                
+                # Sort features by absolute importance
+                sorted_indices = np.argsort(np.abs(scores))
+                features = [features[i] for i in sorted_indices]
+                scores = [scores[i] for i in sorted_indices]
+                
+                # Create horizontal bar plot
+                y_pos = np.arange(len(features))
+                colors = ['red' if s > 0 else 'green' for s in scores]
+                
+                ax.barh(y_pos, scores, align='center', color=colors)
+                ax.set_yticks(y_pos)
+                ax.set_yticklabels(features)
+                ax.invert_yaxis()  # labels read top-to-bottom
+                
+                # Add labels and title
+                ax.set_xlabel('Feature Importance')
+                ax.set_title(f'LIME Explanation for {prediction.upper()} Prediction (Confidence: {confidence:.1%})')
+                
+                # Add vertical line at x=0
+                ax.axvline(x=0, color='black', linestyle='-', alpha=0.3)
+                
+                plt.tight_layout()
+                
+            except Exception as e:
+                logger.error(f"Error creating plot: {str(e)}")
+                raise ValueError(f"Failed to create explanation plot: {str(e)}")
             
             return feature_importance, fig
             

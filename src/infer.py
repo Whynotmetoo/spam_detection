@@ -122,7 +122,8 @@ class EmailPredictor:
     
     def predict(
         self,
-        text: Union[str, list],
+        text: Union[str, list] = "",
+        subject: Union[str, list] = "",
         threshold: float = 0.5
     ) -> Union[Dict[str, Union[str, float]], list]:
         """
@@ -142,7 +143,7 @@ class EmailPredictor:
                 subject, body = self.extract_email_content(text)
             else:
                 # If it's a single text, treat it as body
-                subject = ""
+                subject = self.clean_text(subject)
                 body = self.clean_text(text)
             
             subjects = [subject]
