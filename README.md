@@ -4,18 +4,21 @@ A machine learning project that uses BERT to detect spam and malicious emails. T
 
 ## 🚀 Features
 
-- BERT-based email spam detection
-- Text preprocessing and cleaning
-- Model training and evaluation
+- BERT-based email spam detection with high accuracy
+- Text preprocessing and cleaning for both email subjects and bodies
 - Interactive web interface using Streamlit
 - Model interpretability using SHAP/LIME
-- Support for both text input and email file upload
+- Support for both text input and email file upload (.eml, .txt)
+- Real-time prediction with confidence scores
+- Detailed model performance metrics and visualizations
+- Multi-language support (with English focus)
+- Robust email parsing and content extraction
 
 ## 📋 Prerequisites
 
 - Python 3.8+
-- PyTorch
-- Transformers (Hugging Face)
+- PyTorch 2.7.1+
+- CUDA-capable GPU (optional but recommended for training)
 - Other dependencies listed in `requirements.txt`
 
 ## 🛠️ Installation
@@ -41,55 +44,105 @@ pip install -r requirements.txt
 
 ```
 bert-spam-detector/
-├── data/
-│   ├── raw/                # Raw email data (Enron + SpamAssassin)
-│   └── processed.csv       # Processed dataset (text + labels)
-├── src/
-│   ├── preprocess.py       # Text preprocessing
-│   ├── dataset.py          # Dataset construction
-│   ├── train.py            # BERT fine-tuning
-│   ├── evaluate.py         # Model evaluation
-│   └── infer.py            # Inference functions
-├── model/
-│   └── best_model/         # Saved model checkpoints
 ├── app/
 │   └── ui.py              # Streamlit web interface
-├── requirements.txt
-└── README.md
+├── data/
+│   ├── raw/               # Raw email data
+│   └── processed/         # Processed datasets
+├── model/
+│   ├── best_model/        # Best model checkpoints
+│   └── latest_model/      # Latest model checkpoints
+├── src/
+│   ├── dataset.py         # Dataset construction
+│   ├── evaluate.py        # Model evaluation
+│   ├── explain.py         # Model interpretability
+│   ├── infer.py           # Inference functions
+│   ├── preprocess.py      # Text preprocessing
+│   └── train.py           # BERT fine-tuning
+├── datasets/              # Processed datasets
+├── .streamlit/            # Streamlit configuration
+├── requirements.txt       # Project dependencies
+└── README.md             # Project documentation
 ```
 
 ## 🚀 Usage
 
-1. Data Preparation:
+### 1. Data Preparation
+
+First, prepare your datasets:
+
 ```bash
 python src/preprocess.py
 ```
 
-2. Model Training:
+This will:
+- Process raw email data
+- Clean and normalize text
+- Split into train/validation/test sets
+- Save processed datasets
+
+### 2. Model Training
+
+Train the BERT model:
+
 ```bash
 python src/train.py
 ```
 
-3. Model Evaluation:
+Training features:
+- Fine-tunes BERT on email classification
+- Uses early stopping
+- Saves best and latest models
+- Tracks training metrics
+
+### 3. Model Evaluation
+
+Evaluate model performance:
+
 ```bash
 python src/evaluate.py
 ```
 
-4. Launch Web Interface:
+This will generate:
+- Accuracy, precision, recall, F1-score
+- Confusion matrix
+- ROC curve
+
+### 4. Launch Web Interface
+
+Start the interactive web app:
+
 ```bash
 streamlit run app/ui.py
 ```
 
+Features:
+- Real-time spam detection
+- File upload support
+- Prediction confidence scores
+- Model explanation using LIME
+- Performance metrics visualization
+
 ## 📊 Model Performance
 
-The model is evaluated using:
-- Accuracy
-- Precision, Recall, F1-score
-- ROC-AUC curve
+The model is evaluated using multiple metrics:
+- Accuracy: Overall prediction accuracy
+- Precision: True positives / (True positives + False positives)
+- Recall: True positives / (True positives + False negatives)
+- F1-score: Harmonic mean of precision and recall
+- ROC-AUC: Area under the ROC curve
+
+## 🔍 Model Interpretability
+
+The project includes model interpretability features:
+- LIME-based feature importance analysis
+- Visualization of key decision factors
+- Confidence score explanation
+- Interactive explanation interface
 
 ## 🤝 Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+Contributions are welcome! Please feel free to submit a Pull Request. For major changes, please open an issue first to discuss what you would like to change.
 
 ## 📝 License
 
@@ -97,6 +150,12 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ## 🙏 Acknowledgments
 
-- Hugging Face Transformers
-- Enron Dataset
-- SpamAssassin Dataset 
+- Hugging Face Transformers library
+- Enron Email Dataset
+- SpamAssassin Dataset
+- Streamlit for the web interface
+- SHAP and LIME for model interpretability
+
+## 📧 Contact
+
+For questions or feedback, please open an issue in the repository. 
