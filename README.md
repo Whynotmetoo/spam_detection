@@ -152,9 +152,9 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 - Hugging Face Transformers library
 - Enron Email Dataset
-- SpamAssassin Dataset 
+- Spam Archive Dataset
 - Streamlit for the web interface
-- SHAP and LIME for model interpretability
+- LIME for model interpretability
 
 ## 📧 Contact
 
