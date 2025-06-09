@@ -39,7 +39,14 @@ class ModelEvaluator:
             model_dir (str): Directory containing saved model
             device (str): Device to use for evaluation
         """
-        self.device = device or ('cuda' if torch.cuda.is_available() else 'cpu')
+        if device is not None:
+            self.device = device
+        elif torch.backends.mps.is_available():
+            self.device = "mps"
+        elif torch.cuda.is_available():
+            self.device = "cuda"
+        else:
+            self.device = "cpu"
         logger.info(f"Using device: {self.device}")
         
         try:
@@ -115,7 +122,7 @@ class ModelEvaluator:
     def evaluate(
         self,
         val_loader: DataLoader
-    ) -> Tuple[Dict[str, float], np.ndarray, np.ndarray]:
+    ) -> Tuple[Dict[str, float], np.ndarray, np.ndarray, np.ndarray]:
         """
         Evaluate model on validation set.
         
@@ -123,7 +130,7 @@ class ModelEvaluator:
             val_loader (DataLoader): Validation data loader
             
         Returns:
-            Tuple[Dict[str, float], np.ndarray, np.ndarray]: Metrics, predictions, and true labels
+            Tuple[Dict[str, float], np.ndarray, np.ndarray, np.ndarray]: Metrics, predictions, true labels, and probabilities
         """
         all_preds = []
         all_probs = []
@@ -171,7 +178,7 @@ class ModelEvaluator:
                 'f1': f1
             }
             
-            return metrics, all_preds, all_labels
+            return metrics, all_preds, all_labels, all_probs
             
         except Exception as e:
             logger.error(f"Error during evaluation: {str(e)}")
@@ -262,7 +269,7 @@ def main():
     evaluator = ModelEvaluator()
     
     # Evaluate model
-    metrics, preds, labels = evaluator.evaluate(test_loader)
+    metrics, preds, labels, probs = evaluator.evaluate(test_loader)
     
     # Print metrics
     logger.info("\nTest Set Metrics:")
@@ -272,9 +279,8 @@ def main():
     # Plot confusion matrix
     evaluator.plot_confusion_matrix(labels, preds)
     
-    # Get probabilities for ROC curve
-    probs = evaluator.predict_proba(test_dataset.subjects, test_dataset.bodies)
-    evaluator.plot_roc_curve(labels, probs[:, 1])
+    # Plot ROC curve
+    evaluator.plot_roc_curve(labels, probs)
     
     logger.info("Evaluation completed!")
 

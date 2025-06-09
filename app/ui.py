@@ -364,7 +364,7 @@ def main():
                     
                     # Evaluate fine-tuned model
                     try:
-                        finetuned_metrics, finetuned_preds, finetuned_labels = finetuned_evaluator.evaluate(test_loader)
+                        finetuned_metrics, finetuned_preds, finetuned_labels, finetuned_probs = finetuned_evaluator.evaluate(test_loader)
                     except Exception as e:
                         st.error(f"Error during model evaluation: {str(e)}")
                         logger.error(f"Error during model evaluation: {str(e)}")

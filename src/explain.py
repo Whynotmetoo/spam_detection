@@ -37,7 +37,15 @@ class EmailExplainer:
         """
         self.model = model
         self.tokenizer = tokenizer
-        self.device = device or ('cuda' if torch.cuda.is_available() else 'cpu')
+        if device is not None:
+            self.device = device
+        elif torch.backends.mps.is_available():
+            self.device = "mps"
+        elif torch.cuda.is_available():
+            self.device = "cuda"
+        else:
+            self.device = "cpu"
+        logger.info(f"Using device: {self.device}")
         self.num_features = num_features
         self.num_samples = num_samples
         self.explainer = LimeTextExplainer(class_names=['ham', 'spam'])
